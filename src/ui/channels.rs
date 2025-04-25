@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 
 use crate::api::{data::*, wrapper};
-use crate::ui::StatefulLists::*;
+
+use super::stateful_list::StatefulList;
 
 #[derive(Debug)]
 pub enum DisplayMode {
     GuildMode,
-    ChannelMode
+    ChannelMode,
 }
 
 pub struct App {
-    pub items: StatefulList<Channel>,
-    pub guilds: GuildList<Guild>,
-    pub loaded_channels: HashMap<Channel, Vec<Msg>>,
+    pub channels: StatefulList<Channel>,
+    pub guilds: StatefulList<Guild>,
+    pub loaded_channels: HashMap<Channel, StatefulList<Msg>>,
     pub mode: DisplayMode,
     pub conn: Connection,
 }
@@ -20,15 +21,13 @@ pub struct App {
 impl App {
     //build new app
     pub fn new(guilds: Vec<Guild>, conn: Connection) -> App {
-        let app = App {
-            items: StatefulList::with_items(Vec::new()),
-            guilds: GuildList::with_items(guilds),
+        App {
+            channels: StatefulList::from(Vec::new()),
+            guilds: StatefulList::from(guilds),
             loaded_channels: HashMap::new(),
             mode: DisplayMode::GuildMode,
-            conn
-        };
-
-        return app;
+            conn,
+        }
     }
 
     //Very awkward
@@ -38,7 +37,7 @@ impl App {
             "MESSAGE_CREATE" => {
                 let mut channel_found = Vec::new();
                 let gate_channel_id = &gate_response.message.channel_id;
-                for (key, value) in &self.loaded_channels {
+                for key in self.loaded_channels.keys() {
                     // println!("current channel id: {}, looking for: {}", &key.id, gate_channel_id);
                     let channel_id = &key.id;
                     if channel_id == gate_channel_id {
@@ -48,13 +47,15 @@ impl App {
 
                 for key in channel_found {
                     let mut old_messages = self.loaded_channels[&key].clone();
-                    old_messages.push(gate_response.message.clone());
+                    old_messages.items.push(gate_response.message.clone());
                     //updates the messages with the new one
                     self.loaded_channels.insert(key, old_messages);
                     // dbg!(&self.loaded_channels);
                 }
-            },
-            "READY" => {dbg!(&gate_response.guilds);},
+            }
+            "READY" => {
+                dbg!(&gate_response.guilds);
+            }
             _ => (),
         }
     }
@@ -63,7 +64,7 @@ impl App {
         let current_guild = self.get_guild();
         let channels = current_guild.channels;
 
-        self.items = StatefulList::with_items(channels);
+        self.channels = StatefulList::from(channels);
         self.mode = DisplayMode::ChannelMode;
     }
 
@@ -73,49 +74,37 @@ impl App {
 
     //get current selected channel object
     pub fn get_channel(&mut self) -> Channel {
-        let index = self.items.state.selected();
-        let index = match index {
-            Some(v) => v,
-            None => 0,
-        };
-        return self.items.items[index].clone();
+        let index = self.channels.state.selected();
+        let index = index.unwrap_or_default();
+        self.channels.items[index].clone()
     }
 
-    pub fn get_guild(&mut self) -> Guild{
+    pub fn get_guild(&mut self) -> Guild {
         let index = self.guilds.state.selected();
-        let index = match index {
-            Some(v) => v,
-            None => 0,
-        };
+        let index = index.unwrap_or_default();
 
-        return self.guilds.items[index].clone();
+        self.guilds.items[index].clone()
     }
 
     pub fn get_current_title(&mut self) -> String {
-        let selected_type = self.get_guild();
         match self.mode {
-            DisplayMode::GuildMode => {},
-            DisplayMode::ChannelMode => {
-                //Marks as unused even though it is ?
-                let selected_type = self.get_channel();
-            }
+            DisplayMode::GuildMode => self.get_guild().name,
+            DisplayMode::ChannelMode => self.get_channel().name,
         }
-
-        return selected_type.name;
     }
 
     //CLONES EVERYTIME, PROBABLY SLOW
-    pub fn get_messages(&mut self) -> Option<Vec<Msg>> {
+    pub fn get_messages(&mut self) -> Option<StatefulList<Msg>> {
         match self.mode {
-            DisplayMode::GuildMode => {return None},
+            DisplayMode::GuildMode => return None,
             DisplayMode::ChannelMode => {}
         }
 
         let current_channel = self.get_channel();
 
         match self.loaded_channels.contains_key(&current_channel) {
-            true => return Some(self.loaded_channels[&current_channel].clone()),
-            false => None
+            true => Some(self.loaded_channels[&current_channel].clone()),
+            false => None,
         }
     }
 
@@ -124,9 +113,11 @@ impl App {
         match self.mode {
             DisplayMode::GuildMode => {
                 self.guilds.next();
-                return
-            },
-            DisplayMode::ChannelMode => {self.items.next();}
+                return;
+            }
+            DisplayMode::ChannelMode => {
+                self.channels.next();
+            }
         }
 
         let current_channel = self.get_channel();
@@ -136,8 +127,14 @@ impl App {
             let messages = wrapper::messages(&self.conn, &current_channel);
 
             match messages {
-                Ok(v) => {self.loaded_channels.insert(current_channel, v);},
-                Err(v) => {self.loaded_channels.insert(current_channel, vec![Msg::new()]);}
+                Ok(v) => {
+                    self.loaded_channels
+                        .insert(current_channel, StatefulList::from(v));
+                }
+                Err(_) => {
+                    self.loaded_channels
+                        .insert(current_channel, StatefulList::from(vec![Msg::new()]));
+                }
             }
         }
     }
@@ -147,9 +144,11 @@ impl App {
         match self.mode {
             DisplayMode::GuildMode => {
                 self.guilds.previous();
-                return
-            },
-            DisplayMode::ChannelMode => {self.items.previous();}
+                return;
+            }
+            DisplayMode::ChannelMode => {
+                self.channels.previous();
+            }
         }
 
         let current_channel = self.get_channel();
@@ -159,13 +158,19 @@ impl App {
             let messages = wrapper::messages(&self.conn, &current_channel);
 
             match messages {
-                Ok(v) => {self.loaded_channels.insert(current_channel, v);},
-                Err(v) => {self.loaded_channels.insert(current_channel, vec![Msg::new()]);}
+                Ok(v) => {
+                    self.loaded_channels
+                        .insert(current_channel, StatefulList::from(v));
+                }
+                Err(_) => {
+                    self.loaded_channels
+                        .insert(current_channel, StatefulList::from(vec![Msg::new()]));
+                }
             }
         }
     }
 
     pub fn unselect(&mut self) {
-        self.items.state.select(None);
+        self.channels.state.select(None);
     }
 }

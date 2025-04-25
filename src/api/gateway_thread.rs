@@ -87,7 +87,7 @@ pub fn start_thread(token: &String) -> mpsc::Receiver<GatewayResponse> {
         }
     });
 
-    return rx;
+    rx
 }
 
 //Each event has an attached sequence number
@@ -116,7 +116,7 @@ fn identify(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>, token: &str) {
         }}
     }}", token);
 
-    let reply = Message::Text(reply.into());
+    let reply = Message::Text(reply);
 
     socket.write_message(reply).expect("Identification failed");
 }
@@ -141,10 +141,7 @@ fn read_json_event(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>)
     let msg = socket.read_message();
     let msg = msg.expect("Error reading msg");
     let text_msg = msg.to_text().expect("No text, I think");
-    let json_msg = serde_json::from_str(text_msg);
+    
 
-    match json_msg {
-        Ok(v) => return Ok(v),
-        Err(v) => return Err(v)
-    }
+    serde_json::from_str(text_msg)
 }
