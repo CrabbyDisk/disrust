@@ -1,7 +1,6 @@
 //defining structs here for convenience and to clear up api.rs
 
-use ratatui::widgets::ListItem;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde_json::Value;
 
 fn get_length(list: &serde_json::Value) -> usize {
@@ -60,7 +59,7 @@ impl GatewayResponse {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct User {
-    pub id: String,
+    pub id: u64,
     pub name: String,
     pub discriminator: String,
 }
@@ -68,13 +67,13 @@ pub struct User {
 impl User {
     pub fn new() -> User {
         User {
-            id: "111".to_string(),
+            id: 111,
             name: "Dev".to_string(),
             discriminator: "0001".to_string(),
         }
     }
     pub fn from(author: &Value) -> User {
-        let id = author["id"].as_str().unwrap().to_string();
+        let id = author["id"].as_str().unwrap().parse().unwrap();
         let name = author["username"].as_str().unwrap().to_string();
         let discriminator = author["discriminator"].as_str().unwrap().to_string();
 
@@ -88,13 +87,13 @@ impl User {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Guild {
-    pub id: String,
+    pub id: u64,
     pub name: String,
     pub channels: Vec<Channel>,
 }
 
 impl Guild {
-    pub fn from_list(event: &Value) -> Vec<Guild> {
+    pub fn from_list(event: &Value) -> Vec<Self> {
         //VERY UGLY + WRAPPER DUPE. Fix eventually
         let guild_vc = String::from("2");
         let category = String::from("4");
@@ -116,35 +115,26 @@ impl Guild {
             guild_forum,
         ]);
 
-        let guilds = &event["guilds"];
-        let length = get_length(guilds);
-        let mut guild_list = Vec::new();
-        for i in 0..length {
-            let id = guilds[i]["id"].as_str().unwrap().to_string();
-            let name = guilds[i]["name"].as_str().unwrap().to_string();
-
-            let channel_length = get_length(&guilds[i]["channels"]);
-            let mut channels = Vec::new();
-            for j in 0..channel_length {
-                let channel = Channel::from(&guilds[i]["channels"][j]);
-
-                if ignored_channels.contains(&channel.channel_type) {
-                    continue;
-                } else {
-                    channels.push(channel);
-                }
-            }
-
-            let guild = Guild { id, name, channels };
-            guild_list.push(guild);
-        }
-
-        guild_list
+        let guilds = event["guilds"].as_array().unwrap();
+        guilds
+            .iter()
+            .map(|guild| Guild {
+                id: guild["id"].as_str().unwrap().parse().unwrap(),
+                name: guild["name"].as_str().unwrap().to_string(),
+                channels: guild["channels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(Channel::from)
+                    .filter(|channel| !ignored_channels.contains(&channel.channel_type))
+                    .collect(),
+            })
+            .collect()
     }
 
     //get rid of eventually
     pub fn from_partial(event: &Value) -> Guild {
-        let id = event["id"].as_str().unwrap().to_string();
+        let id = event["id"].as_str().unwrap().parse().unwrap();
         let name = event["name"].as_str().unwrap().to_string();
 
         Guild {
@@ -157,14 +147,14 @@ impl Guild {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Channel {
-    pub id: String,
+    pub id: u64,
     pub name: String,
     pub channel_type: String,
 }
 
 impl Channel {
     pub fn from(event: &Value) -> Channel {
-        let id = event["id"].as_str().unwrap().to_string();
+        let id = event["id"].as_str().unwrap().parse().unwrap();
         let name = event["name"].as_str().unwrap().to_string();
         let channel_type = event["type"].as_i64().unwrap().to_string();
 
@@ -178,8 +168,8 @@ impl Channel {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Msg {
-    pub id: String,
-    pub channel_id: String,
+    pub id: u64,
+    pub channel_id: u64,
     pub user: User,
     pub content: String,
 }
@@ -187,16 +177,16 @@ pub struct Msg {
 impl Msg {
     pub fn new() -> Msg {
         Msg {
-            id: "222".to_string(),
-            channel_id: "333".to_string(),
+            id: 222,
+            channel_id: 333,
             user: User::new(),
             content: "Unable to open a channel without proper permission".to_string(),
         }
     }
     //Might not work for every event in mind ??
     pub fn from(event: &Value) -> Msg {
-        let id = event["id"].as_str().unwrap().to_string();
-        let channel_id = event["channel_id"].as_str().unwrap().to_string();
+        let id = event["id"].as_str().unwrap().parse().unwrap();
+        let channel_id = event["channel_id"].as_str().unwrap().parse().unwrap();
 
         let author = &event["author"];
         let user = User::from(author);

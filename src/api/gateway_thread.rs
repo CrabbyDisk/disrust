@@ -12,99 +12,100 @@ VC has its own op codes
 btw people's email address is public through the api I think, weird
 */
 
-use url::Url;
-use tokio_tungstenite::tungstenite::{connect, Message, WebSocket};
-use tokio_tungstenite::tungstenite::stream::MaybeTlsStream;
-use std::net::TcpStream;
-use std::time::Instant;
+use futures::{SinkExt, StreamExt};
 use serde_json::{self, Value};
-use std::thread;
-use std::sync::mpsc;
+use std::time::Instant;
+use tokio::spawn;
+use tokio::sync::mpsc;
+use tokio::{net::TcpStream, sync::mpsc::UnboundedSender};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use url::Url;
 
 use crate::api::data::*;
 
-pub fn start_thread(token: &String) -> mpsc::Receiver<GatewayResponse> {
-    let (tx, rx) = mpsc::channel();
-
-    let gateway_url = "wss://gateway.discord.gg/?v=9&encoding=json";
-    let (mut socket, response) = connect(
-        Url::parse(gateway_url).unwrap()
-    ).expect("Can't connect");
+pub async fn start_thread(tx: UnboundedSender<GatewayResponse>, token: &str) {
+    let gateway_url = Url::parse("wss://gateway.discord.gg/?v=9&encoding=json").unwrap();
+    let (mut socket, response) = connect_async(gateway_url).await.expect("Can't connect");
 
     //Not sure if it's correct terminology
-    let handshake = read_json_event(&mut socket).unwrap();
+    let handshake = read_json_event(&mut socket).await.unwrap();
     let hb_interval = handshake["d"]["heartbeat_interval"].as_i64().unwrap();
     println!("Received Hbeat: {}", hb_interval);
 
-    identify(&mut socket, token);
+    identify(&mut socket, token).await;
 
-    //Can get a lot of data from it in order to 
+    //Can get a lot of data from it in order to
     //not update much in network_thread
-    let ready = read_json_event(&mut socket).expect("Couldn't get ready event");
+    let ready = read_json_event(&mut socket)
+        .await
+        .expect("Couldn't get ready event");
     ready_event(&tx, ready);
 
-    thread::spawn(move || {
+    spawn(async move {
         let mut timer = Instant::now();
         loop {
-            let event = read_json_event(&mut socket);
+            let event = read_json_event(&mut socket).await;
             // dbg!(&event);
-            match &event {
-                Ok(v) => (),
-                Err(v) => {println!("Gateway disconnected");
-                           continue;},
+            if event.is_err() {
+                println!("Gateway disconnected");
+                continue;
             }
-            
+
             let event = event.unwrap();
 
             let op_code = event["op"].as_i64().unwrap();
             // dbg!(op_code);
             if op_code == 1 {
-                heartbeat(&mut socket);
+                heartbeat(&mut socket).await;
             }
 
             //Should put all the events in a list or smthn
             if op_code == 0 {
                 let event_name = event["t"].as_str().unwrap();
                 match event_name {
-                    "MESSAGE_CREATE" => {message_created(&tx, &event);},
+                    "MESSAGE_CREATE" => {
+                        message_created(&tx, &event);
+                    }
                     "MESSAGE_REACTION_ADD" => (),
                     "MESSAGE_REACTION_REMOVE" => (),
                     "TYPING_START" => (),
                     "CHANNEL_CREATE" => (),
                     "GUILD_CREATE" => (),
                     "GUILD_DELETE" => (),
-                    _ => ()
+                    _ => (),
                 }
             }
-            
+
             //Heartbeat here
             //A thread would have to borrow the socket and it was a pain
             let elapsed = timer.elapsed().as_millis() as i64;
             if hb_interval <= elapsed {
-                heartbeat(&mut socket);
+                heartbeat(&mut socket).await;
                 timer = Instant::now();
             }
         }
     });
-
-    rx
 }
 
 //Each event has an attached sequence number
 //Heartbeats need to include latest sequence number
 //^^^ Didn't use it in python test and had no problems. Abandoned for now
-fn heartbeat(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
-    let reply = Message::Text(r#"{
+async fn heartbeat(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) {
+    let reply = Message::Text(
+        r#"{
         "op": 1,
         "d": "null"
-    }"#.into());
+    }"#
+        .into(),
+    );
 
-    socket.write_message(reply).expect("Hbeat failed");
+    socket.send(reply).await.expect("Hbeat failed");
 }
 
-fn identify(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>, token: &str) {
+async fn identify(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, token: &str) {
     //ugly as fuck
-    let reply = format!("{{
+    let reply = format!(
+        "{{
         \"op\": 2,
         \"d\": {{
             \"token\": \"{}\",
@@ -114,21 +115,23 @@ fn identify(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>, token: &str) {
                 \"$device\": \"pc\"
             }}
         }}
-    }}", token);
+    }}",
+        token
+    );
 
     let reply = Message::Text(reply);
 
-    socket.write_message(reply).expect("Identification failed");
+    socket.send(reply).await.expect("Identification failed");
 }
 
 //Makes a Msg object and sends it back to ui thread
-fn message_created(tx: &mpsc::Sender<GatewayResponse>, event: &Value) {
+fn message_created(tx: &mpsc::UnboundedSender<GatewayResponse>, event: &Value) {
     let msg = Msg::from(&event["d"]);
     let gate_response = GatewayResponse::msg_create(msg);
     tx.send(gate_response).unwrap();
 }
 
-fn ready_event(tx: &mpsc::Sender<GatewayResponse>, event: Value) {
+fn ready_event(tx: &mpsc::UnboundedSender<GatewayResponse>, event: Value) {
     let guilds = Guild::from_list(&event["d"]);
     let gate_response = GatewayResponse::ready(guilds);
     tx.send(gate_response).unwrap();
@@ -136,12 +139,12 @@ fn ready_event(tx: &mpsc::Sender<GatewayResponse>, event: Value) {
 
 // use result instead
 // Some weird shit with gateway disconnect idk
-fn read_json_event(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) 
-        -> Result<serde_json::Value, serde_json::Error> {
-    let msg = socket.read_message();
-    let msg = msg.expect("Error reading msg");
+async fn read_json_event(
+    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let msg = socket.next().await;
+    let msg = msg.expect("Error reading msg").unwrap();
     let text_msg = msg.to_text().expect("No text, I think");
-    
 
     serde_json::from_str(text_msg)
 }

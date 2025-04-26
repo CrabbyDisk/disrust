@@ -109,7 +109,7 @@ impl App {
     }
 
     //Moves cursor down
-    pub fn next(&mut self) {
+    pub async fn next(&mut self) {
         match self.mode {
             DisplayMode::GuildMode => {
                 self.guilds.next();
@@ -124,7 +124,7 @@ impl App {
         //Check whether the channel has already been loaded
         //Don't wanna spam discord
         if !(self.loaded_channels.contains_key(&current_channel)) {
-            let messages = wrapper::messages(&self.conn, &current_channel);
+            let messages = wrapper::messages(&self.conn, &current_channel).await;
 
             match messages {
                 Ok(v) => {
@@ -140,7 +140,7 @@ impl App {
     }
 
     //Moves cursor up
-    pub fn previous(&mut self) {
+    pub async fn previous(&mut self) {
         match self.mode {
             DisplayMode::GuildMode => {
                 self.guilds.previous();
@@ -155,7 +155,7 @@ impl App {
         //Check whether the channel has already been loaded
         //Don't wanna spam discord
         if !(self.loaded_channels.contains_key(&current_channel)) {
-            let messages = wrapper::messages(&self.conn, &current_channel);
+            let messages = wrapper::messages(&self.conn, &current_channel).await;
 
             match messages {
                 Ok(v) => {

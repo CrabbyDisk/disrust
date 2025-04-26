@@ -17,7 +17,7 @@ fn get_length(list: &serde_json::Value) -> usize {
 
 //Should be removed
 //Would be much better to figure out deserialization in structs
-fn get(list: &serde_json::Value, index: usize, key: &str) -> anyhow::Result<String, &'static str> {
+fn get(list: &serde_json::Value, index: usize, key: &str) -> Result<String, &'static str> {
     //BIG BRAIN DOWN HERE
 
     let mut value = list[index].get(key);
@@ -43,7 +43,7 @@ fn get(list: &serde_json::Value, index: usize, key: &str) -> anyhow::Result<Stri
 }
 
 //Get a reqwest and return json
-fn request_json(conn: &Connection, url: &str) -> serde_json::Value {
+async fn request_json(conn: &Connection, url: &str) -> serde_json::Value {
     //request discord data
     let auth = &conn.auth;
     let client = &conn.client;
@@ -52,8 +52,10 @@ fn request_json(conn: &Connection, url: &str) -> serde_json::Value {
         .get(url)
         .header(&auth.0, &auth.1)
         .send()
+        .await
         .expect("Shit out of luck")
         .json()
+        .await
         .unwrap();
 
     // dbg!(&response);
@@ -61,10 +63,10 @@ fn request_json(conn: &Connection, url: &str) -> serde_json::Value {
 }
 
 //get guilds
-pub fn guilds(conn: &Connection) -> Vec<Guild> {
+pub async fn guilds(conn: &Connection) -> Vec<Guild> {
     //Url changes for every request
     let url = "https://discord.com/api/v9/users/@me/guilds";
-    let response = request_json(conn, url);
+    let response = request_json(conn, url).await;
 
     let mut server_list = Vec::new();
 
@@ -80,9 +82,9 @@ pub fn guilds(conn: &Connection) -> Vec<Guild> {
 
 //MIGHT BREAK IF THERE ARE NO TEXT OR VOICE CHANNELS IN A SERVER
 //MIGHT BE SLOW ?
-pub fn channels(conn: &Connection, server: &Guild) -> Vec<Channel> {
+pub async fn channels(conn: &Connection, server: &Guild) -> Vec<Channel> {
     let url = format!("https://discord.com/api/v9/guilds/{}/channels", server.id);
-    let response = request_json(conn, url.as_str());
+    let response = request_json(conn, url.as_str()).await;
 
     let mut channel_list = Vec::new();
 
@@ -134,12 +136,12 @@ pub fn find_channel(channels: &Vec<Channel>, title: &str) -> Result<Channel, &'s
     Err("Could not find channel")
 }
 
-pub fn messages(conn: &Connection, channel: &Channel) -> anyhow::Result<Vec<Msg>, &'static str> {
+pub async fn messages(conn: &Connection, channel: &Channel) -> Result<Vec<Msg>, &'static str> {
     let url = format!(
         "https://discord.com/api/v9/channels/{}/messages?limit=80",
         channel.id
     );
-    let response = request_json(conn, url.as_str());
+    let response = request_json(conn, url.as_str()).await;
 
     //delete this last get
     let potential_panic = get(&response, 0, "code");
@@ -161,9 +163,9 @@ pub fn messages(conn: &Connection, channel: &Channel) -> anyhow::Result<Vec<Msg>
     Ok(message_list)
 }
 
-pub fn friends(conn: &Connection) -> Vec<User> {
+pub async fn friends(conn: &Connection) -> Vec<User> {
     let url = "https://discord.com/api/v9/users/@me/relationships";
-    let response = request_json(conn, url);
+    let response = request_json(conn, url).await;
 
     let mut friends_list = Vec::new();
 
@@ -176,7 +178,7 @@ pub fn friends(conn: &Connection) -> Vec<User> {
     friends_list
 }
 
-pub fn send_message(app: &mut App, input: &String) {
+pub async fn send_message(app: &mut App, input: &String) {
     let channel_id = app.get_channel().id;
     let conn = &app.conn;
     let client = &conn.client;
@@ -193,6 +195,6 @@ pub fn send_message(app: &mut App, input: &String) {
         .header(header.0, header.1)
         .form(&params)
         .send()
+        .await
         .expect("Failed to send input");
 }
-

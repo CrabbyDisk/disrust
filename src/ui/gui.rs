@@ -1,5 +1,6 @@
 //GUI = gooey
 use crossterm::event::{self, Event, KeyCode};
+use futures::StreamExt;
 use ratatui::{
     backend::Backend,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -7,11 +8,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
-use std::io;
-use std::sync::mpsc::Receiver;
-
-use std::time::Duration;
-use std::time::Instant;
+use tokio::sync::mpsc;
 
 use crate::api::data::*;
 use crate::ui::channels::App;
@@ -21,56 +18,56 @@ use crate::ui::{
 };
 
 //Main loop
-pub fn run<B: Backend>(
+pub async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     cbox: &mut ChatBox,
-    gate_rx: &Receiver<GatewayResponse>,
-) -> io::Result<()> {
-    let tick_rate = Duration::from_millis(250);
-    let mut last_tick = Instant::now();
+    mut gate_rx: mpsc::UnboundedReceiver<GatewayResponse>,
+) -> Result<(), std::io::Error> {
+    let mut events = event::EventStream::new();
     loop {
-        match gate_rx.try_recv() {
+        /* match gate_rx.try_recv() {
             Ok(v) => app.react_to_gateway(&v),
             Err(_v) => {}
-        }
+        } */
 
         //Draws the screen. Comment out when debugging
         terminal.draw(|f| ui(f, app, cbox))?;
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+        tokio::select! {
+            event = events.next() => {
+                if let Some(Ok(Event::Key(key))) = event {
 
-        //Read input
-        //CodeAesthetic would be upset
-        //Have to use poll to avoid blocking
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                match cbox.input_mode {
-                    InputMode::Normal => match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('e') => cbox.toggle(),
-                        KeyCode::Left => app.unselect(),
-                        KeyCode::Down => app.next(),
-                        KeyCode::Up => app.previous(),
-                        KeyCode::Enter => app.enter_guild(),
-                        KeyCode::Esc => app.leave_guild(),
-                        _ => (),
-                    },
-                    InputMode::Editing => match key.code {
-                        KeyCode::Enter => cbox.send_message(app),
-                        KeyCode::Esc => cbox.toggle(),
-                        KeyCode::Char(c) => cbox.input.push(c),
-                        KeyCode::Backspace => {
-                            cbox.input.pop();
-                        }
-                        _ => (),
-                    },
+                    match cbox.input_mode {
+                        InputMode::Normal => match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Char('e') => cbox.toggle(),
+                            KeyCode::Left => app.unselect(),
+                            KeyCode::Down => app.next().await,
+                            KeyCode::Up => app.previous().await,
+                            KeyCode::Enter => app.enter_guild(),
+                            KeyCode::Esc => app.leave_guild(),
+                            _ => (),
+                        },
+                        InputMode::Editing => match key.code {
+                            KeyCode::Enter => cbox.send_message(app).await,
+                            KeyCode::Esc => cbox.toggle(),
+                            KeyCode::Char(c) => cbox.input.push(c),
+                            KeyCode::Backspace => {
+                                cbox.input.pop();
+                            }
+                            _ => (),
+                        },
+                    }
+                }
+
+            }
+
+            event = gate_rx.recv() => {
+                if let Some(v) = event {
+                    app.react_to_gateway(&v);
+
                 }
             }
-        }
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
         }
     }
 }

@@ -2,10 +2,12 @@ mod api;
 mod ui;
 use crate::api::data::*;
 use api::gateway_thread;
+use tokio::sync::mpsc;
 //has all the structs used
 use ui::{channels::App, chat_box::ChatBox, gui::run};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("Please paste in your token. If you don't know what that is, please google");
 
     let mut token = String::new();
@@ -18,13 +20,17 @@ fn main() {
 
     let mut terminal = ratatui::init();
 
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
     // conn.auth.1 is the token
-    let gate_rx = gateway_thread::start_thread(&conn.auth.1);
-    let guilds = gate_rx.recv().unwrap().guilds;
+    gateway_thread::start_thread(tx, &conn.auth.1).await;
+
+    let guilds = rx.recv().await.unwrap().guilds;
 
     let mut app = App::new(guilds, conn);
     let mut cbox = ChatBox::new();
-    let result = run(&mut terminal, &mut app, &mut cbox, &gate_rx);
+
+    let result = run(&mut terminal, &mut app, &mut cbox, rx).await;
 
     ratatui::restore();
     if let Err(err) = result {

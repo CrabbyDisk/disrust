@@ -1,6 +1,5 @@
 use ratatui::{
     style::{Color, Style},
-    text::Span,
     widgets::{List, ListItem, ListState},
 };
 
